@@ -2,12 +2,13 @@ import { expect } from "chai";
 import { ethers, fhevm } from "hardhat";
 import { Contract } from "ethers";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
-
+import { ZeroHash } from "ethers";
+const { FhevmType } = require("@fhevm/hardhat-plugin");
 // For timestamp verification
 const anyValue = () => true;
 
 describe("RiskScore Contract", function () {
-  let riskScore: Contract;
+  let riskScore: any;
   let owner: SignerWithAddress;
   let insuranceCompany1: SignerWithAddress;
   let insuranceCompany2: SignerWithAddress;
@@ -97,7 +98,7 @@ describe("RiskScore Contract", function () {
       
       // Extract the encrypted data handles and proof
       const encryptedHandles = encryptedInputs.handles;
-      const inputProof = encryptedInputs.proof;
+      const inputProof = encryptedInputs.inputProof;
       
       // Submit the data to the contract
       await expect(
@@ -134,7 +135,7 @@ describe("RiskScore Contract", function () {
         riskScore.connect(user1).submitHealthData(
           insuranceCompany2.address, // Not registered yet
           ...encryptedInputs.handles,
-          encryptedInputs.proof
+          encryptedInputs.inputProof
         )
       ).to.be.revertedWith("Insurance company not registered");
     });
@@ -154,7 +155,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany1.address,
         ...encryptedInputs.handles,
-        encryptedInputs.proof
+        encryptedInputs.inputProof
       );
       
       // Create second input for same user & company
@@ -170,7 +171,7 @@ describe("RiskScore Contract", function () {
         riskScore.connect(user1).submitHealthData(
           insuranceCompany1.address,
           ...encryptedInputs2.handles,
-          encryptedInputs2.proof
+          encryptedInputs2.inputProof
         )
       ).to.be.revertedWith("Data already submitted");
     });
@@ -195,7 +196,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany1.address,
         ...encryptedInputs.handles,
-        encryptedInputs.proof
+        encryptedInputs.inputProof
       );
     });
 
@@ -259,7 +260,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany1.address,
         ...encryptedInputs.handles,
-        encryptedInputs.proof
+        encryptedInputs.inputProof
       );
       
       // Compute risk score
@@ -297,7 +298,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user2).submitHealthData(
         insuranceCompany1.address,
         ...encryptedInputs.handles,
-        encryptedInputs.proof
+        encryptedInputs.inputProof
       );
       
       // Try to grant permission without computing score
@@ -342,7 +343,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany1.address,
         ...encryptedInputs.handles,
-        encryptedInputs.proof
+        encryptedInputs.inputProof
       );
       
       await riskScore.computeRiskScore(
@@ -363,19 +364,19 @@ describe("RiskScore Contract", function () {
       );
       
       // For encrypted values, we just check that a non-zero handle is returned
-      expect(riskScoreHandle).to.not.equal(ethers.constants.HashZero);
+      expect(riskScoreHandle).to.not.equal(ZeroHash);
       
       // Optionally decrypt and check the score if your test environment supports it
       if (fhevm.userDecryptEuint) {
         const decryptedScore = await fhevm.userDecryptEuint(
-          32, // 32 bits for euint32
+          FhevmType.euint32, // 32 bits for euint32
           riskScoreHandle,
           riskScore.address,
           user1
         );
         
         // The score should be a number greater than 0
-        expect(decryptedScore.gt(0)).to.be.true;
+        expect(decryptedScore > 0n).to.be.true;
       }
     });
 
@@ -386,7 +387,7 @@ describe("RiskScore Contract", function () {
         insuranceCompany1.address
       );
       
-      expect(riskScoreHandle).to.not.equal(ethers.constants.HashZero);
+      expect(riskScoreHandle).to.not.equal(ZeroHash);
     });
 
     it("Should reject unauthorized access to risk score", async function () {
@@ -418,7 +419,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany1.address,
         ...encryptedInputs1.handles,
-        encryptedInputs1.proof
+        encryptedInputs1.inputProof
       );
       
       // Submit data to company 2
@@ -431,7 +432,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany2.address,
         ...encryptedInputs2.handles,
-        encryptedInputs2.proof
+        encryptedInputs2.inputProof
       );
       
       // Verify separate data tracking
@@ -460,7 +461,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany1.address,
         ...encryptedInputs1.handles,
-        encryptedInputs1.proof
+        encryptedInputs1.inputProof
       );
       
       const input2 = fhevm.createEncryptedInput(riskScore.address, user1.address);
@@ -472,7 +473,7 @@ describe("RiskScore Contract", function () {
       await riskScore.connect(user1).submitHealthData(
         insuranceCompany2.address,
         ...encryptedInputs2.handles,
-        encryptedInputs2.proof
+        encryptedInputs2.inputProof
       );
       
       // Compute risk scores
