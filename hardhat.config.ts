@@ -1,8 +1,7 @@
-import  { HardhatUserConfig } from "hardhat/config";
+import { HardhatUserConfig } from "hardhat/config";
+import "@nomicfoundation/hardhat-toolbox";
 import "@fhevm/hardhat-plugin";
-import * as dotenv from "dotenv";
-
-dotenv.config();
+import "dotenv/config";
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -17,17 +16,27 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
-      // For local testing
+      // This is important for FHEVM mocks to work properly
+      chainId: 31337, // Use a static chain ID
+      allowUnlimitedContractSize: true,
+      blockGasLimit: 100000000,
+      gas: 100000000
     },
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "https://eth-sepolia.public.blastapi.io",
       accounts: process.env.SEPOLIA_PRIVATE_KEY ? [process.env.SEPOLIA_PRIVATE_KEY] : [],
     },
   },
-  // Optional settings for etherscan verification if needed
-  etherscan: {
-    apiKey: process.env.ETHERSCAN_API_KEY,
+  paths: {
+    sources: "./contracts",
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts"
   },
+  // Make sure Mocha doesn't timeout too quickly for FHEVM tests
+  mocha: {
+    timeout: 100000 // ms
+  }
 };
 
 export default config;

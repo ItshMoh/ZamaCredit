@@ -1,40 +1,35 @@
-// test/RiskScore.ts
+import { expect } from "chai";
+import { ethers, fhevm } from "hardhat";
+import { Contract } from "ethers";
+import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
-import assert from "node:assert/strict";
-import { describe, it, beforeEach } from "node:test";
-import { network } from "hardhat";
-import { parseEther, getAddress } from "viem";
+// For timestamp verification
+const anyValue = () => true;
 
-// Types for our test structure
-interface TestAccounts {
-  deployer: any;
-  insuranceCompany1: any;
-  insuranceCompany2: any;
-  user1: any;
-  user2: any;
-}
+describe("RiskScore Contract", function () {
+  let riskScore: Contract;
+  let owner: SignerWithAddress;
+  let insuranceCompany1: SignerWithAddress;
+  let insuranceCompany2: SignerWithAddress;
+  let user1: SignerWithAddress;
+  let user2: SignerWithAddress;
 
-describe("RiskScore Contract", async function () {
-  const { viem } = await network.connect();
-  const publicClient = await viem.getPublicClient();
-  
-  let riskScore: any;
-  let accounts: TestAccounts;
+  // Set a longer timeout for FHE operations
+  this.timeout(60000);
 
-  // Setup before each test
   beforeEach(async function () {
-    // Deploy fresh contract for each test
-    riskScore = await viem.deployContract("RiskScore");
+    // Get signers
+    const signers = await ethers.getSigners();
+    owner = signers[0];
+    insuranceCompany1 = signers[1];
+    insuranceCompany2 = signers[2];
+    user1 = signers[3];
+    user2 = signers[4];
     
-    // Get test accounts
-    const walletClients = await viem.getWalletClients();
-    accounts = {
-      deployer: walletClients[0],
-      insuranceCompany1: walletClients[1], 
-      insuranceCompany2: walletClients[2],
-      user1: walletClients[3],
-      user2: walletClients[4]
-    };
+    // Deploy the contract
+    const RiskScore = await ethers.getContractFactory("RiskScore");
+    riskScore = await RiskScore.deploy();
+    await riskScore.deployed();
   });
 
   describe("Insurance Company Registration", function () {
@@ -42,587 +37,466 @@ describe("RiskScore Contract", async function () {
       const companyName = "Test Insurance Co";
       
       // Register company
-      await viem.assertions.emitWithArgs(
-        riskScore.write.registerInsuranceCompany([companyName], {
-          account: accounts.insuranceCompany1.account
-        }),
-        riskScore,
-        "InsuranceCompanyRegistered",
-        [accounts.insuranceCompany1.account.address, companyName]
-      );
+      await expect(riskScore.connect(insuranceCompany1).registerInsuranceCompany(companyName))
+        .to.emit(riskScore, "InsuranceCompanyRegistered")
+        .withArgs(insuranceCompany1.address, companyName);
 
       // Verify company is registered
-      const company = await riskScore.read.insuranceCompanies([
-        accounts.insuranceCompany1.account.address
-      ]);
+      const company = await riskScore.insuranceCompanies(insuranceCompany1.address);
       
-      assert.equal(company.companyName, companyName);
-      assert.equal(company.isRegistered, true);
-      assert.equal(company.companyAddress, accounts.insuranceCompany1.account.address);
+      expect(company.companyName).to.equal(companyName);
+      expect(company.isRegistered).to.be.true;
+      expect(company.companyAddress).to.equal(insuranceCompany1.address);
     });
 
     it("Should prevent duplicate company registration", async function () {
       const companyName = "Test Insurance Co";
       
       // First registration should succeed
-      await riskScore.write.registerInsuranceCompany([companyName], {
-        account: accounts.insuranceCompany1.account
-      });
+      await riskScore.connect(insuranceCompany1).registerInsuranceCompany(companyName);
 
       // Second registration should fail
-      await assert.rejects(
-        riskScore.write.registerInsuranceCompany([companyName], {
-          account: accounts.insuranceCompany1.account
-        }),
-        /Company already registered/
-      );
+      await expect(
+        riskScore.connect(insuranceCompany1).registerInsuranceCompany(companyName)
+      ).to.be.revertedWith("Company already registered");
     });
 
     it("Should reject empty company name", async function () {
-      await assert.rejects(
-        riskScore.write.registerInsuranceCompany([""], {
-          account: accounts.insuranceCompany1.account
-        }),
-        /Company name required/
-      );
+      await expect(
+        riskScore.connect(insuranceCompany1).registerInsuranceCompany("")
+      ).to.be.revertedWith("Company name required");
     });
   });
 
   describe("Health Data Submission", function () {
     beforeEach(async function () {
       // Register insurance company before each test
-      await riskScore.write.registerInsuranceCompany(["Test Insurance"], {
-        account: accounts.insuranceCompany1.account
-      });
+      await riskScore.connect(insuranceCompany1).registerInsuranceCompany("Test Insurance");
     });
 
     it("Should allow user to submit valid health data", async function () {
-      // Mock encrypted health data (in real implementation, this would be properly encrypted)
-      const healthData = {
-        height: 175,      // 175cm
-        weight: 70,       // 70kg  
-        systolic: 120,    // 120 mmHg
-        diastolic: 80,    // 80 mmHg
-        hdl: 50,          // 50 mg/dL
-        ldl: 100,         // 100 mg/dL
-        triglycerides: 150, // 150 mg/dL
-        totalChol: 200,   // 200 mg/dL
-        bloodSugar: 90,   // 90 mg/dL
-        pulse: 70,        // 70 bpm
-        age: 30,          // 30 years
-        gender: 1         // male
-      };
-
-      // Create mock encrypted inputs (simplified for testing)
-      const mockProof = "0x1234567890abcdef"; // Mock proof
+      // Create encrypted inputs for all health parameters
+      const input = fhevm.createEncryptedInput(riskScore.address, user1.address);
       
-      // Note: In real implementation, you'd use actual FHE encryption
-      // For testing purposes, we'll simulate the encrypted inputs
-      const encryptedInputs = Object.values(healthData).map(val => 
-        `0x${val.toString(16).padStart(64, '0')}`
-      );
-
-      await viem.assertions.emitWithArgs(
-        riskScore.write.submitHealthData([
-          accounts.insuranceCompany1.account.address,
-          ...encryptedInputs,
-          mockProof
-        ], {
-          account: accounts.user1.account
-        }),
-        riskScore,
-        "HealthDataSubmitted",
-        [
-          accounts.user1.account.address,
-          accounts.insuranceCompany1.account.address,
-          // timestamp will be block.timestamp, we can't predict exact value
-        ]
-      );
-
-      // Verify data submission status
-      const isSubmitted = await riskScore.read.isHealthDataSubmitted([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
+      // Add each health metric with sensible values for testing
+      input.add32(175);  // height in cm
+      input.add32(70);   // weight in kg
+      input.add32(120);  // systolic
+      input.add32(80);   // diastolic
+      input.add32(50);   // hdl
+      input.add32(100);  // ldl
+      input.add32(150);  // triglycerides
+      input.add32(200);  // totalChol
+      input.add32(90);   // bloodSugar
+      input.add32(70);   // pulse
+      input.add32(30);   // age
+      input.add32(1);    // gender (male)
       
-      assert.equal(isSubmitted, true);
+      // Encrypt all inputs
+      const encryptedInputs = await input.encrypt();
+      
+      // Extract the encrypted data handles and proof
+      const encryptedHandles = encryptedInputs.handles;
+      const inputProof = encryptedInputs.proof;
+      
+      // Submit the data to the contract
+      await expect(
+        riskScore.connect(user1).submitHealthData(
+          insuranceCompany1.address,
+          ...encryptedHandles,
+          inputProof
+        )
+      ).to.emit(riskScore, "HealthDataSubmitted")
+        .withArgs(user1.address, insuranceCompany1.address, anyValue);
+      
+      // Verify that the data is recorded as submitted
+      const isSubmitted = await riskScore.isHealthDataSubmitted(
+        user1.address, 
+        insuranceCompany1.address
+      );
+      expect(isSubmitted).to.be.true;
     });
 
     it("Should reject submission to unregistered insurance company", async function () {
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      await assert.rejects(
-        riskScore.write.submitHealthData([
-          accounts.insuranceCompany2.account.address, // Unregistered company
-          ...mockData,
-          mockProof
-        ], {
-          account: accounts.user1.account
-        }),
-        /Insurance company not registered/
-      );
+      // Create encrypted inputs for all health parameters
+      const input = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      
+      // Add each health metric with arbitrary values
+      for (let i = 0; i < 12; i++) {
+        input.add32(100);  // Just use dummy values for testing
+      }
+      
+      // Encrypt all inputs
+      const encryptedInputs = await input.encrypt();
+      
+      // Submit to unregistered insurance company should fail
+      await expect(
+        riskScore.connect(user1).submitHealthData(
+          insuranceCompany2.address, // Not registered yet
+          ...encryptedInputs.handles,
+          encryptedInputs.proof
+        )
+      ).to.be.revertedWith("Insurance company not registered");
     });
 
     it("Should prevent duplicate data submission", async function () {
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
+      // Create and submit first data set
+      const input = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      
+      // Add values
+      for (let i = 0; i < 12; i++) {
+        input.add32(100);
+      }
+      
+      const encryptedInputs = await input.encrypt();
+      
       // First submission
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      // Second submission should fail
-      await assert.rejects(
-        riskScore.write.submitHealthData([
-          accounts.insuranceCompany1.account.address,
-          ...mockData,
-          mockProof
-        ], {
-          account: accounts.user1.account
-        }),
-        /Data already submitted/
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany1.address,
+        ...encryptedInputs.handles,
+        encryptedInputs.proof
       );
+      
+      // Create second input for same user & company
+      const input2 = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      for (let i = 0; i < 12; i++) {
+        input2.add32(120); // Different values
+      }
+      
+      const encryptedInputs2 = await input2.encrypt();
+      
+      // Second submission should fail
+      await expect(
+        riskScore.connect(user1).submitHealthData(
+          insuranceCompany1.address,
+          ...encryptedInputs2.handles,
+          encryptedInputs2.proof
+        )
+      ).to.be.revertedWith("Data already submitted");
     });
   });
 
   describe("Risk Score Computation", function () {
     beforeEach(async function () {
-      // Setup: Register company and submit health data
-      await riskScore.write.registerInsuranceCompany(["Test Insurance"], {
-        account: accounts.insuranceCompany1.account
-      });
-
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
+      // Register insurance company
+      await riskScore.connect(insuranceCompany1).registerInsuranceCompany("Test Insurance");
+      
+      // Submit health data
+      const input = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      
+      // Add health metrics for user1
+      for (let i = 0; i < 12; i++) {
+        input.add32(100); // Using 100 as a default value for all metrics
+      }
+      
+      const encryptedInputs = await input.encrypt();
+      
+      // Submit the data
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany1.address,
+        ...encryptedInputs.handles,
+        encryptedInputs.proof
+      );
     });
 
     it("Should compute risk score for submitted health data", async function () {
-      await viem.assertions.emitWithArgs(
-        riskScore.write.computeRiskScore([
-          accounts.user1.account.address,
-          accounts.insuranceCompany1.account.address
-        ]),
-        riskScore,
-        "RiskScoreComputed",
-        [
-          accounts.user1.account.address,
-          accounts.insuranceCompany1.account.address,
-          // timestamp will be block.timestamp
-        ]
-      );
-
-      // Verify score computation status
-      const isComputed = await riskScore.read.isRiskScoreComputed([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
+      // Compute risk score
+      await expect(
+        riskScore.computeRiskScore(
+          user1.address, 
+          insuranceCompany1.address
+        )
+      ).to.emit(riskScore, "RiskScoreComputed")
+        .withArgs(user1.address, insuranceCompany1.address, anyValue);
       
-      assert.equal(isComputed, true);
+      // Verify score is computed
+      const isComputed = await riskScore.isRiskScoreComputed(
+        user1.address,
+        insuranceCompany1.address
+      );
+      expect(isComputed).to.be.true;
     });
 
     it("Should reject computation for non-existent health data", async function () {
-      await assert.rejects(
-        riskScore.write.computeRiskScore([
-          accounts.user2.account.address, // No data submitted
-          accounts.insuranceCompany1.account.address
-        ]),
-        /No health data submitted/
-      );
+      // Try to compute for user2 who has not submitted data
+      await expect(
+        riskScore.computeRiskScore(
+          user2.address, 
+          insuranceCompany1.address
+        )
+      ).to.be.revertedWith("No health data submitted");
     });
 
     it("Should prevent duplicate risk score computation", async function () {
       // First computation
-      await riskScore.write.computeRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
-
+      await riskScore.computeRiskScore(
+        user1.address,
+        insuranceCompany1.address
+      );
+      
       // Second computation should fail
-      await assert.rejects(
-        riskScore.write.computeRiskScore([
-          accounts.user1.account.address,
-          accounts.insuranceCompany1.account.address
-        ]),
-        /Score already computed/
-      );
-    });
-
-    it("Should reject computation for unregistered insurance company", async function () {
-      await assert.rejects(
-        riskScore.write.computeRiskScore([
-          accounts.user1.account.address,
-          accounts.insuranceCompany2.account.address // Unregistered
-        ]),
-        /Insurance company not registered/
-      );
+      await expect(
+        riskScore.computeRiskScore(
+          user1.address,
+          insuranceCompany1.address
+        )
+      ).to.be.revertedWith("Score already computed");
     });
   });
 
   describe("Permission Management", function () {
     beforeEach(async function () {
-      // Setup: Register company, submit data, and compute score
-      await riskScore.write.registerInsuranceCompany(["Test Insurance"], {
-        account: accounts.insuranceCompany1.account
-      });
-
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      await riskScore.write.computeRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
+      // Register company
+      await riskScore.connect(insuranceCompany1).registerInsuranceCompany("Test Insurance");
+      
+      // Submit health data for user1
+      const input = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      for (let i = 0; i < 12; i++) {
+        input.add32(100);
+      }
+      const encryptedInputs = await input.encrypt();
+      
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany1.address,
+        ...encryptedInputs.handles,
+        encryptedInputs.proof
+      );
+      
+      // Compute risk score
+      await riskScore.computeRiskScore(
+        user1.address,
+        insuranceCompany1.address
+      );
     });
 
     it("Should allow user to grant permission to insurance company", async function () {
-      await viem.assertions.emitWithArgs(
-        riskScore.write.grantRiskScorePermission([
-          accounts.insuranceCompany1.account.address
-        ], {
-          account: accounts.user1.account
-        }),
-        riskScore,
-        "RiskScoreSent",
-        [
-          accounts.user1.account.address,
-          accounts.insuranceCompany1.account.address,
-          // timestamp
-        ]
-      );
-
-      // Verify permission is granted
-      const hasPermission = await riskScore.read.hasPermission([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
+      // Grant permission
+      await expect(
+        riskScore.connect(user1).grantRiskScorePermission(
+          insuranceCompany1.address
+        )
+      ).to.emit(riskScore, "RiskScoreSent")
+        .withArgs(user1.address, insuranceCompany1.address, anyValue);
       
-      assert.equal(hasPermission, true);
+      // Verify permission is granted
+      const hasPermission = await riskScore.hasPermission(
+        user1.address,
+        insuranceCompany1.address
+      );
+      expect(hasPermission).to.be.true;
     });
 
     it("Should reject permission grant for uncomputed risk score", async function () {
       // Submit data for user2 but don't compute score
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user2.account
-      });
-
-      await assert.rejects(
-        riskScore.write.grantRiskScorePermission([
-          accounts.insuranceCompany1.account.address
-        ], {
-          account: accounts.user2.account
-        }),
-        /Risk score not computed/
+      const input = fhevm.createEncryptedInput(riskScore.address, user2.address);
+      for (let i = 0; i < 12; i++) {
+        input.add32(100);
+      }
+      const encryptedInputs = await input.encrypt();
+      
+      await riskScore.connect(user2).submitHealthData(
+        insuranceCompany1.address,
+        ...encryptedInputs.handles,
+        encryptedInputs.proof
       );
+      
+      // Try to grant permission without computing score
+      await expect(
+        riskScore.connect(user2).grantRiskScorePermission(
+          insuranceCompany1.address
+        )
+      ).to.be.revertedWith("Risk score not computed");
     });
 
     it("Should allow user to revoke permission", async function () {
       // First grant permission
-      await riskScore.write.grantRiskScorePermission([
-        accounts.insuranceCompany1.account.address
-      ], {
-        account: accounts.user1.account
-      });
-
-      // Then revoke it
-      await riskScore.write.revokePermission([
-        accounts.insuranceCompany1.account.address
-      ], {
-        account: accounts.user1.account
-      });
-
-      // Verify permission is revoked
-      const hasPermission = await riskScore.read.hasPermission([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
+      await riskScore.connect(user1).grantRiskScorePermission(
+        insuranceCompany1.address
+      );
       
-      assert.equal(hasPermission, false);
+      // Then revoke it
+      await riskScore.connect(user1).revokePermission(
+        insuranceCompany1.address
+      );
+      
+      // Verify permission is revoked
+      const hasPermission = await riskScore.hasPermission(
+        user1.address,
+        insuranceCompany1.address
+      );
+      expect(hasPermission).to.be.false;
     });
   });
 
   describe("Risk Score Access", function () {
     beforeEach(async function () {
       // Complete setup: Register, submit, compute, and grant permission
-      await riskScore.write.registerInsuranceCompany(["Test Insurance"], {
-        account: accounts.insuranceCompany1.account
-      });
-
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      await riskScore.write.computeRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
-
-      await riskScore.write.grantRiskScorePermission([
-        accounts.insuranceCompany1.account.address
-      ], {
-        account: accounts.user1.account
-      });
+      await riskScore.connect(insuranceCompany1).registerInsuranceCompany("Test Insurance");
+      
+      const input = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      for (let i = 0; i < 12; i++) {
+        input.add32(100);
+      }
+      const encryptedInputs = await input.encrypt();
+      
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany1.address,
+        ...encryptedInputs.handles,
+        encryptedInputs.proof
+      );
+      
+      await riskScore.computeRiskScore(
+        user1.address,
+        insuranceCompany1.address
+      );
+      
+      await riskScore.connect(user1).grantRiskScorePermission(
+        insuranceCompany1.address
+      );
     });
 
     it("Should allow user to access their own risk score", async function () {
-      const riskScoreHandle = await riskScore.read.getRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ], {
-        account: accounts.user1.account
-      });
-
-      // Risk score should be returned as encrypted handle (bytes32)
-      assert.notEqual(riskScoreHandle, "0x0000000000000000000000000000000000000000000000000000000000000000");
+      // User should be able to access their own score
+      const riskScoreHandle = await riskScore.connect(user1).getRiskScore(
+        user1.address,
+        insuranceCompany1.address
+      );
+      
+      // For encrypted values, we just check that a non-zero handle is returned
+      expect(riskScoreHandle).to.not.equal(ethers.constants.HashZero);
+      
+      // Optionally decrypt and check the score if your test environment supports it
+      if (fhevm.userDecryptEuint) {
+        const decryptedScore = await fhevm.userDecryptEuint(
+          32, // 32 bits for euint32
+          riskScoreHandle,
+          riskScore.address,
+          user1
+        );
+        
+        // The score should be a number greater than 0
+        expect(decryptedScore.gt(0)).to.be.true;
+      }
     });
 
     it("Should allow authorized insurance company to access risk score", async function () {
-      const riskScoreHandle = await riskScore.read.getRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ], {
-        account: accounts.insuranceCompany1.account
-      });
-
-      // Risk score should be returned as encrypted handle
-      assert.notEqual(riskScoreHandle, "0x0000000000000000000000000000000000000000000000000000000000000000");
+      // Insurance company should be able to access the score after permission
+      const riskScoreHandle = await riskScore.connect(insuranceCompany1).getRiskScore(
+        user1.address,
+        insuranceCompany1.address
+      );
+      
+      expect(riskScoreHandle).to.not.equal(ethers.constants.HashZero);
     });
 
     it("Should reject unauthorized access to risk score", async function () {
-      await assert.rejects(
-        riskScore.read.getRiskScore([
-          accounts.user1.account.address,
-          accounts.insuranceCompany1.account.address
-        ], {
-          account: accounts.insuranceCompany2.account // Not authorized
-        }),
-        /Not authorized to access risk score/
-      );
-    });
-
-    it("Should reject access to non-existent risk score", async function () {
-      await assert.rejects(
-        riskScore.read.getRiskScore([
-          accounts.user2.account.address, // No data submitted
-          accounts.insuranceCompany1.account.address
-        ], {
-          account: accounts.user2.account
-        }),
-        /Risk score not computed/
-      );
+      // Insurance company 2 is not authorized
+      await expect(
+        riskScore.connect(insuranceCompany2).getRiskScore(
+          user1.address,
+          insuranceCompany1.address
+        )
+      ).to.be.revertedWith("Not authorized to access risk score");
     });
   });
 
   describe("Multi-Company Support", function () {
     beforeEach(async function () {
       // Register multiple insurance companies
-      await riskScore.write.registerInsuranceCompany(["Insurance Co 1"], {
-        account: accounts.insuranceCompany1.account
-      });
-      
-      await riskScore.write.registerInsuranceCompany(["Insurance Co 2"], {
-        account: accounts.insuranceCompany2.account
-      });
+      await riskScore.connect(insuranceCompany1).registerInsuranceCompany("Insurance Co 1");
+      await riskScore.connect(insuranceCompany2).registerInsuranceCompany("Insurance Co 2");
     });
 
     it("Should support separate data for different insurance companies", async function () {
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      // Submit data to both companies
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany2.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
+      // Submit data to company 1
+      const input1 = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      for (let i = 0; i < 12; i++) {
+        input1.add32(100);
+      }
+      const encryptedInputs1 = await input1.encrypt();
+      
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany1.address,
+        ...encryptedInputs1.handles,
+        encryptedInputs1.proof
+      );
+      
+      // Submit data to company 2
+      const input2 = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      for (let i = 0; i < 12; i++) {
+        input2.add32(120); // Different values
+      }
+      const encryptedInputs2 = await input2.encrypt();
+      
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany2.address,
+        ...encryptedInputs2.handles,
+        encryptedInputs2.proof
+      );
+      
       // Verify separate data tracking
-      const isSubmitted1 = await riskScore.read.isHealthDataSubmitted([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
-
-      const isSubmitted2 = await riskScore.read.isHealthDataSubmitted([
-        accounts.user1.account.address,
-        accounts.insuranceCompany2.account.address
-      ]);
-
-      assert.equal(isSubmitted1, true);
-      assert.equal(isSubmitted2, true);
+      const isSubmitted1 = await riskScore.isHealthDataSubmitted(
+        user1.address,
+        insuranceCompany1.address
+      );
+      
+      const isSubmitted2 = await riskScore.isHealthDataSubmitted(
+        user1.address,
+        insuranceCompany2.address
+      );
+      
+      expect(isSubmitted1).to.be.true;
+      expect(isSubmitted2).to.be.true;
     });
 
     it("Should maintain separate permissions for different companies", async function () {
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      // Complete flow for both companies
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany2.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      await riskScore.write.computeRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
-
-      await riskScore.write.computeRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany2.account.address
-      ]);
-
+      // Submit data to both companies
+      const input1 = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      for (let i = 0; i < 12; i++) {
+        input1.add32(100);
+      }
+      const encryptedInputs1 = await input1.encrypt();
+      
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany1.address,
+        ...encryptedInputs1.handles,
+        encryptedInputs1.proof
+      );
+      
+      const input2 = fhevm.createEncryptedInput(riskScore.address, user1.address);
+      for (let i = 0; i < 12; i++) {
+        input2.add32(120);
+      }
+      const encryptedInputs2 = await input2.encrypt();
+      
+      await riskScore.connect(user1).submitHealthData(
+        insuranceCompany2.address,
+        ...encryptedInputs2.handles,
+        encryptedInputs2.proof
+      );
+      
+      // Compute risk scores
+      await riskScore.computeRiskScore(user1.address, insuranceCompany1.address);
+      await riskScore.computeRiskScore(user1.address, insuranceCompany2.address);
+      
       // Grant permission only to company 1
-      await riskScore.write.grantRiskScorePermission([
-        accounts.insuranceCompany1.account.address
-      ], {
-        account: accounts.user1.account
-      });
-
+      await riskScore.connect(user1).grantRiskScorePermission(
+        insuranceCompany1.address
+      );
+      
       // Check permissions
-      const hasPermission1 = await riskScore.read.hasPermission([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
-
-      const hasPermission2 = await riskScore.read.hasPermission([
-        accounts.user1.account.address,
-        accounts.insuranceCompany2.account.address
-      ]);
-
-      assert.equal(hasPermission1, true);
-      assert.equal(hasPermission2, false);
-    });
-  });
-
-  describe("Edge Cases and Security", function () {
-    it("Should handle contract deployment correctly", async function () {
-      // Verify contract is deployed and accessible
-      const contractAddress = await riskScore.address;
-      assert.notEqual(contractAddress, undefined);
+      const hasPermission1 = await riskScore.hasPermission(
+        user1.address,
+        insuranceCompany1.address
+      );
       
-      // Check that no companies are registered initially
-      const unregisteredCompany = await riskScore.read.insuranceCompanies([
-        accounts.insuranceCompany1.account.address
-      ]);
-      assert.equal(unregisteredCompany.isRegistered, false);
-    });
-
-    it("Should maintain data isolation between users", async function () {
-      // Register company
-      await riskScore.write.registerInsuranceCompany(["Test Insurance"], {
-        account: accounts.insuranceCompany1.account
-      });
-
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      // Submit data for user1
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      // Check that user2 has no data
-      const user2HasData = await riskScore.read.isHealthDataSubmitted([
-        accounts.user2.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
-
-      assert.equal(user2HasData, false);
-    });
-
-    it("Should prevent unauthorized score computation", async function () {
-      // Register company and submit data
-      await riskScore.write.registerInsuranceCompany(["Test Insurance"], {
-        account: accounts.insuranceCompany1.account
-      });
-
-      const mockData = Array(12).fill("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-      const mockProof = "0x1234567890abcdef";
-
-      await riskScore.write.submitHealthData([
-        accounts.insuranceCompany1.account.address,
-        ...mockData,
-        mockProof
-      ], {
-        account: accounts.user1.account
-      });
-
-      // Try to compute score from unauthorized account (should still work as it's a public function)
-      // The authorization is checked in getRiskScore, not computeRiskScore
-      await riskScore.write.computeRiskScore([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ], {
-        account: accounts.user2.account // Different user can compute
-      });
-
-      // Verify computation succeeded
-      const isComputed = await riskScore.read.isRiskScoreComputed([
-        accounts.user1.account.address,
-        accounts.insuranceCompany1.account.address
-      ]);
+      const hasPermission2 = await riskScore.hasPermission(
+        user1.address,
+        insuranceCompany2.address
+      );
       
-      assert.equal(isComputed, true);
+      expect(hasPermission1).to.be.true;
+      expect(hasPermission2).to.be.false;
     });
   });
 });

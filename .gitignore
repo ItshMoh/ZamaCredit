@@ -1,6 +1,7 @@
 # Node modules
 /node_modules
-
+/fhevmTemp
+/typechain-types
 
 
 # Compilation output
